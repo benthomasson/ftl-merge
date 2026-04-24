@@ -10,7 +10,6 @@ from ftl_merge.cli import (
     has_outlist,
     load_network,
     retract_beliefs,
-    get_issue_for_pr,
 )
 
 
@@ -142,8 +141,8 @@ class TestLoadNetwork:
         )
         load_network(cwd="/some/path")
         mock_run.assert_called_once_with(
-            "reasons export",
-            shell=True, capture_output=True, text=True, cwd="/some/path",
+            ["reasons", "export"],
+            capture_output=True, text=True, cwd="/some/path",
         )
 
 
@@ -160,8 +159,7 @@ class TestRetractBeliefs:
             pr_number=27,
         )
 
-        calls = [c for c in mock_run.call_args_list]
-        retract_cmds = [c[0][0] for c in calls]
+        retract_cmds = [c[0][0] for c in mock_run.call_args_list]
         assert any("propagate-assumes-dependents-exist" in cmd for cmd in retract_cmds)
         assert not any("propagation-is-crash-free" in cmd for cmd in retract_cmds)
 
@@ -176,7 +174,7 @@ class TestRetractBeliefs:
         mock_run.assert_called_once()
         cmd = mock_run.call_args[0][0]
         assert "propagate-assumes-dependents-exist" in cmd
-        assert 'Fixed in PR #27' in cmd
+        assert "Fixed in PR #27" in mock_run.call_args[0][0]
 
     @patch("ftl_merge.cli.subprocess.run")
     @patch("ftl_merge.cli.load_network")
