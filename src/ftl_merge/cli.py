@@ -9,12 +9,7 @@ import sys
 
 
 def run(cmd, *, check=True, capture=True, cwd=None):
-    """Run a command and return stdout.
-
-    cmd can be a list of args or a string (split on whitespace).
-    """
-    if isinstance(cmd, str):
-        cmd = cmd.split()
+    """Run a command (list of args) and return stdout."""
     result = subprocess.run(
         cmd, capture_output=capture, text=True, cwd=cwd
     )
@@ -124,15 +119,6 @@ def retract_beliefs(beliefs, pr_number, cwd=None):
             print(f"  Retracted: {belief_id}")
         else:
             print(f"  Skip (not found or already OUT): {belief_id}")
-
-
-def export_beliefs():
-    """Regenerate beliefs.md and network.json."""
-    run(["reasons", "export-markdown", "-o", "beliefs.md"])
-    from pathlib import Path
-    network_json = run(["reasons", "export"])
-    Path("network.json").write_text(network_json + "\n")
-    print("  Updated beliefs.md and network.json")
 
 
 def pull_repo(repo_path):
