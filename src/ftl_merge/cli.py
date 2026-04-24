@@ -102,6 +102,10 @@ def retract_beliefs(beliefs, pr_number, cwd=None):
     propagation from restoring them.
     """
     network_data = load_network(cwd=cwd)
+    if not network_data:
+        print("  ERROR: Could not load network — skipping all retractions.", file=sys.stderr)
+        print("  Run 'reasons retract' manually after fixing the issue.", file=sys.stderr)
+        return
     for belief_id in beliefs:
         if has_outlist(belief_id, network_data):
             print(f"  Skip (GATE belief, will propagate): {belief_id}")

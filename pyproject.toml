@@ -11,6 +11,12 @@ authors = [
 keywords = ["automation", "beliefs", "merge", "code-expert"]
 dependencies = []
 
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [project.urls]
 Homepage = "https://github.com/benthomasson/ftl-merge"
 Repository = "https://github.com/benthomasson/ftl-merge"
