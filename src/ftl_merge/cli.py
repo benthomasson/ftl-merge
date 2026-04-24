@@ -2,18 +2,19 @@
 
 import argparse
 import json
+from pathlib import Path
 import re
 import subprocess
 import sys
 
 
 def run(cmd, *, check=True, capture=True, cwd=None):
-    """Run a shell command and return stdout."""
+    """Run a command (list of args) and return stdout."""
     result = subprocess.run(
-        cmd, shell=True, capture_output=capture, text=True, cwd=cwd
+        cmd, capture_output=capture, text=True, cwd=cwd
     )
     if check and result.returncode != 0:
-        print(f"Error running: {cmd}", file=sys.stderr)
+        print(f"Error running: {' '.join(cmd)}", file=sys.stderr)
         if result.stderr:
             print(result.stderr, file=sys.stderr)
         sys.exit(1)
@@ -41,7 +42,7 @@ def parse_beliefs_from_issue(issue_body):
 
 def get_issue_for_pr(repo, pr_number):
     """Get the issue number a PR closes."""
-    body = run(f"gh pr view {pr_number} --repo {repo} --json body -q .body")
+    body = run(["gh", "pr", "view", str(pr_number), "--repo", repo, "--json", "body", "-q", ".body"])
     # Look for "Closes #N" or "Fixes #N"
     match = re.search(r"(?:closes|fixes|resolves)\s+#(\d+)", body, re.IGNORECASE)
     if match:
@@ -51,14 +52,14 @@ def get_issue_for_pr(repo, pr_number):
 
 def get_issue_body(repo, issue_number):
     """Get issue body text."""
-    return run(f"gh issue view {issue_number} --repo {repo} --json body -q .body")
+    return run(["gh", "issue", "view", str(issue_number), "--repo", repo, "--json", "body", "-q", ".body"])
 
 
 def merge_pr(repo, pr_number):
     """Merge a PR. Returns True on success, False on conflict."""
     result = subprocess.run(
-        f"gh pr merge {pr_number} --repo {repo} --merge",
-        shell=True, capture_output=True, text=True,
+        ["gh", "pr", "merge", str(pr_number), "--repo", repo, "--merge"],
+        capture_output=True, text=True,
     )
     if result.returncode != 0:
         if "not mergeable" in result.stderr.lower() or "conflict" in result.stderr.lower():
@@ -68,12 +69,51 @@ def merge_pr(repo, pr_number):
     return True
 
 
-def retract_beliefs(beliefs, pr_number):
-    """Retract beliefs using reasons CLI."""
+def load_network(cwd=None):
+    """Load the reasons network as JSON."""
+    result = subprocess.run(
+        ["reasons", "export"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if result.returncode != 0:
+        return {}
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {}
+
+
+def has_outlist(belief_id, network_data):
+    """Check if a belief has any outlist justifications (GATE belief)."""
+    node = network_data.get("nodes", {}).get(belief_id)
+    if not node:
+        return False
+    for j in node.get("justifications", []):
+        if j.get("outlist"):
+            return True
+    return False
+
+
+def retract_beliefs(beliefs, pr_number, cwd=None):
+    """Retract beliefs using reasons CLI, skipping GATE beliefs.
+
+    GATE beliefs have outlist justifications and should flip IN
+    automatically via TMS propagation when their outlist nodes go OUT.
+    Explicitly retracting them sets _retracted metadata which prevents
+    propagation from restoring them.
+    """
+    network_data = load_network(cwd=cwd)
+    if not network_data:
+        print("  ERROR: Could not load network — skipping all retractions.", file=sys.stderr)
+        print("  Run 'reasons retract' manually after fixing the issue.", file=sys.stderr)
+        return
     for belief_id in beliefs:
+        if has_outlist(belief_id, network_data):
+            print(f"  Skip (GATE belief, will propagate): {belief_id}")
+            continue
         result = subprocess.run(
-            f'reasons retract {belief_id} --reason "Fixed in PR #{pr_number}"',
-            shell=True, capture_output=True, text=True,
+            ["reasons", "retract", belief_id, "--reason", f"Fixed in PR #{pr_number}"],
+            capture_output=True, text=True, cwd=cwd,
         )
         if result.returncode == 0:
             print(f"  Retracted: {belief_id}")
@@ -81,16 +121,9 @@ def retract_beliefs(beliefs, pr_number):
             print(f"  Skip (not found or already OUT): {belief_id}")
 
 
-def export_beliefs():
-    """Regenerate beliefs.md and network.json."""
-    run("reasons export-markdown -o beliefs.md")
-    run("reasons export > network.json")
-    print("  Updated beliefs.md and network.json")
-
-
 def pull_repo(repo_path):
     """Pull latest from remote."""
-    run("git pull", cwd=repo_path)
+    run(["git", "pull"], cwd=repo_path)
 
 
 def cmd_merge(args):
@@ -132,7 +165,7 @@ def cmd_merge(args):
                 beliefs = parse_beliefs_from_issue(issue_body)
                 if beliefs:
                     print(f"  Found {len(beliefs)} belief(s) to retract: {', '.join(beliefs)}")
-                    retract_beliefs(beliefs, pr_num)
+                    retract_beliefs(beliefs, pr_num, cwd=expert_dir)
                 else:
                     print("  No beliefs found in issue body")
             else:
@@ -146,21 +179,22 @@ def cmd_merge(args):
     # Step 4: Export beliefs
     if args.auto_retract and expert_dir:
         print(f"\nExporting beliefs...")
-        run("reasons export-markdown -o beliefs.md", cwd=expert_dir)
-        run("reasons export > network.json", cwd=expert_dir)
+        run(["reasons", "export-markdown", "-o", "beliefs.md"], cwd=expert_dir)
+        network_json = run(["reasons", "export"], cwd=expert_dir)
+        (Path(expert_dir) / "network.json").write_text(network_json + "\n")
         print("  Updated beliefs.md and network.json")
 
     # Step 5: Commit belief updates
     if args.auto_retract and expert_dir and args.commit:
         print(f"\nCommitting belief updates...")
-        run("git add beliefs.md network.json", cwd=expert_dir)
+        run(["git", "add", "beliefs.md", "network.json"], cwd=expert_dir)
         merged = ", ".join(f"#{n}" for n in pr_numbers)
         run(
-            f'git commit -m "Retract beliefs for merged PRs: {merged}"',
+            ["git", "commit", "-m", f"Retract beliefs for merged PRs: {merged}"],
             cwd=expert_dir,
         )
         if args.push:
-            run("git push", cwd=expert_dir)
+            run(["git", "push"], cwd=expert_dir)
             print("  Pushed.")
 
     print(f"\nDone. Merged {len(pr_numbers)} PR(s).")
