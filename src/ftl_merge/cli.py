@@ -68,12 +68,47 @@ def merge_pr(repo, pr_number):
     return True
 
 
-def retract_beliefs(beliefs, pr_number):
-    """Retract beliefs using reasons CLI."""
+def load_network(cwd=None):
+    """Load the reasons network as JSON."""
+    result = subprocess.run(
+        "reasons export",
+        shell=True, capture_output=True, text=True, cwd=cwd,
+    )
+    if result.returncode != 0:
+        return {}
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {}
+
+
+def has_outlist(belief_id, network_data):
+    """Check if a belief has any outlist justifications (GATE belief)."""
+    node = network_data.get("nodes", {}).get(belief_id)
+    if not node:
+        return False
+    for j in node.get("justifications", []):
+        if j.get("outlist"):
+            return True
+    return False
+
+
+def retract_beliefs(beliefs, pr_number, cwd=None):
+    """Retract beliefs using reasons CLI, skipping GATE beliefs.
+
+    GATE beliefs have outlist justifications and should flip IN
+    automatically via TMS propagation when their outlist nodes go OUT.
+    Explicitly retracting them sets _retracted metadata which prevents
+    propagation from restoring them.
+    """
+    network_data = load_network(cwd=cwd)
     for belief_id in beliefs:
+        if has_outlist(belief_id, network_data):
+            print(f"  Skip (GATE belief, will propagate): {belief_id}")
+            continue
         result = subprocess.run(
             f'reasons retract {belief_id} --reason "Fixed in PR #{pr_number}"',
-            shell=True, capture_output=True, text=True,
+            shell=True, capture_output=True, text=True, cwd=cwd,
         )
         if result.returncode == 0:
             print(f"  Retracted: {belief_id}")
@@ -132,7 +167,7 @@ def cmd_merge(args):
                 beliefs = parse_beliefs_from_issue(issue_body)
                 if beliefs:
                     print(f"  Found {len(beliefs)} belief(s) to retract: {', '.join(beliefs)}")
-                    retract_beliefs(beliefs, pr_num)
+                    retract_beliefs(beliefs, pr_num, cwd=expert_dir)
                 else:
                     print("  No beliefs found in issue body")
             else:
